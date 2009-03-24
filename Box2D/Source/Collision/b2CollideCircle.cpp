@@ -17,38 +17,29 @@
 */
 
 #include "b2Collision.h"
-#include "Shapes/b2CircleShape.h"
-#include "Shapes/b2PolygonShape.h"
+#include "b2Shape.h"
 
-void b2CollideCircles(
-	b2Manifold* manifold,
-	const b2CircleShape* circle1, const b2XForm& xf1,
-	const b2CircleShape* circle2, const b2XForm& xf2)
+void b2CollideCircle(b2Manifold* manifold, b2CircleShape* circle1, b2CircleShape* circle2, bool conservative)
 {
 	manifold->pointCount = 0;
 
-	b2Vec2 p1 = b2Mul(xf1, circle1->GetLocalPosition());
-	b2Vec2 p2 = b2Mul(xf2, circle2->GetLocalPosition());
-
-	b2Vec2 d = p2 - p1;
+	b2Vec2 d = circle2->m_position - circle1->m_position;
 	float32 distSqr = b2Dot(d, d);
-	float32 r1 = circle1->GetRadius();
-	float32 r2 = circle2->GetRadius();
-	float32 radiusSum = r1 + r2;
-	if (distSqr > radiusSum * radiusSum)
+	float32 radiusSum = circle1->m_radius + circle2->m_radius;
+	if (distSqr > radiusSum * radiusSum && conservative == false)
 	{
 		return;
 	}
 
 	float32 separation;
-	if (distSqr < B2_FLT_EPSILON)
+	if (distSqr < FLT_EPSILON)
 	{
 		separation = -radiusSum;
 		manifold->normal.Set(0.0f, 1.0f);
 	}
 	else
 	{
-		float32 dist = b2Sqrt(distSqr);
+		float32 dist = sqrtf(distSqr);
 		separation = dist - radiusSum;
 		float32 a = 1.0f / dist;
 		manifold->normal.x = a * d.x;
@@ -58,39 +49,25 @@ void b2CollideCircles(
 	manifold->pointCount = 1;
 	manifold->points[0].id.key = 0;
 	manifold->points[0].separation = separation;
-
-	p1 += r1 * manifold->normal;
-	p2 -= r2 * manifold->normal;
-
-	b2Vec2 p = 0.5f * (p1 + p2);
-
-	manifold->points[0].localPoint1 = b2MulT(xf1, p);
-	manifold->points[0].localPoint2 = b2MulT(xf2, p);
+	manifold->points[0].position = circle2->m_position - circle2->m_radius * manifold->normal;
 }
 
-void b2CollidePolygonAndCircle(
-	b2Manifold* manifold,
-	const b2PolygonShape* polygon, const b2XForm& xf1,
-	const b2CircleShape* circle, const b2XForm& xf2)
+void b2CollidePolyAndCircle(b2Manifold* manifold, const b2PolyShape* poly, const b2CircleShape* circle, bool conservative)
 {
+	NOT_USED(conservative);
+
 	manifold->pointCount = 0;
 
 	// Compute circle position in the frame of the polygon.
-	b2Vec2 c = b2Mul(xf2, circle->GetLocalPosition());
-	b2Vec2 cLocal = b2MulT(xf1, c);
+	b2Vec2 xLocal = b2MulT(poly->m_R, circle->m_position - poly->m_position);
 
 	// Find the min separating edge.
 	int32 normalIndex = 0;
-	float32 separation = -B2_FLT_MAX;
-	float32 radius = circle->GetRadius();
-	int32 vertexCount = polygon->GetVertexCount();
-	const b2Vec2* vertices = polygon->GetVertices();
-	const b2Vec2* normals = polygon->GetNormals();
-
-	for (int32 i = 0; i < vertexCount; ++i)
+	float32 separation = -FLT_MAX;
+	const float32 radius = circle->m_radius;
+	for (int32 i = 0; i < poly->m_vertexCount; ++i)
 	{
-		float32 s = b2Dot(normals[i], cLocal - vertices[i]);
-
+		float32 s = b2Dot(poly->m_normals[i], xLocal - poly->m_vertices[i]);
 		if (s > radius)
 		{
 			// Early out.
@@ -105,52 +82,70 @@ void b2CollidePolygonAndCircle(
 	}
 
 	// If the center is inside the polygon ...
-	if (separation < B2_FLT_EPSILON)
+	if (separation < FLT_EPSILON)
 	{
 		manifold->pointCount = 1;
-		manifold->normal = b2Mul(xf1.R, normals[normalIndex]);
+		manifold->normal = b2Mul(poly->m_R, poly->m_normals[normalIndex]);
 		manifold->points[0].id.features.incidentEdge = (uint8)normalIndex;
 		manifold->points[0].id.features.incidentVertex = b2_nullFeature;
-		manifold->points[0].id.features.referenceEdge = 0;
+		manifold->points[0].id.features.referenceFace = b2_nullFeature;
 		manifold->points[0].id.features.flip = 0;
-		b2Vec2 position = c - radius * manifold->normal;
-		manifold->points[0].localPoint1 = b2MulT(xf1, position);
-		manifold->points[0].localPoint2 = b2MulT(xf2, position);
+		manifold->points[0].position = circle->m_position - radius * manifold->normal;
 		manifold->points[0].separation = separation - radius;
 		return;
 	}
 
 	// Project the circle center onto the edge segment.
 	int32 vertIndex1 = normalIndex;
-	int32 vertIndex2 = vertIndex1 + 1 < vertexCount ? vertIndex1 + 1 : 0;
-	b2Vec2 e = vertices[vertIndex2] - vertices[vertIndex1];
-
+	int32 vertIndex2 = vertIndex1 + 1 < poly->m_vertexCount ? vertIndex1 + 1 : 0;
+	b2Vec2 e = poly->m_vertices[vertIndex2] - poly->m_vertices[vertIndex1];
 	float32 length = e.Normalize();
-	b2Assert(length > B2_FLT_EPSILON);
+
+	// If the edge length is zero ...
+	if (length < FLT_EPSILON)
+	{
+		b2Vec2 d = xLocal - poly->m_vertices[vertIndex1];
+		float32 dist = d.Normalize();
+		if (dist > radius)
+		{
+			return;
+		}
+
+		manifold->pointCount = 1;
+		manifold->normal = b2Mul(poly->m_R, d);
+		manifold->points[0].id.features.incidentEdge = b2_nullFeature;
+		manifold->points[0].id.features.incidentVertex = (uint8)vertIndex1;
+		manifold->points[0].id.features.referenceFace = b2_nullFeature;
+		manifold->points[0].id.features.flip = 0;
+		manifold->points[0].position = circle->m_position - radius * manifold->normal;
+		manifold->points[0].separation = dist - radius;
+		return;
+	}
 
 	// Project the center onto the edge.
-	float32 u = b2Dot(cLocal - vertices[vertIndex1], e);
+	float32 u = b2Dot(xLocal - poly->m_vertices[vertIndex1], e);
+	manifold->points[0].id.features.incidentEdge = b2_nullFeature;
+	manifold->points[0].id.features.incidentVertex = b2_nullFeature;
+	manifold->points[0].id.features.referenceFace = b2_nullFeature;
+	manifold->points[0].id.features.flip = 0;
 	b2Vec2 p;
 	if (u <= 0.0f)
 	{
-		p = vertices[vertIndex1];
-		manifold->points[0].id.features.incidentEdge = b2_nullFeature;
+		p = poly->m_vertices[vertIndex1];
 		manifold->points[0].id.features.incidentVertex = (uint8)vertIndex1;
 	}
 	else if (u >= length)
 	{
-		p = vertices[vertIndex2];
-		manifold->points[0].id.features.incidentEdge = b2_nullFeature;
+		p = poly->m_vertices[vertIndex2];
 		manifold->points[0].id.features.incidentVertex = (uint8)vertIndex2;
 	}
 	else
 	{
-		p = vertices[vertIndex1] + u * e;
-		manifold->points[0].id.features.incidentEdge = (uint8)normalIndex;
-		manifold->points[0].id.features.incidentVertex = 0;
+		p = poly->m_vertices[vertIndex1] + u * e;
+		manifold->points[0].id.features.incidentEdge = (uint8)vertIndex1;
 	}
 
-	b2Vec2 d = cLocal - p;
+	b2Vec2 d = xLocal - p;
 	float32 dist = d.Normalize();
 	if (dist > radius)
 	{
@@ -158,11 +153,7 @@ void b2CollidePolygonAndCircle(
 	}
 
 	manifold->pointCount = 1;
-	manifold->normal = b2Mul(xf1.R, d);
-	b2Vec2 position = c - radius * manifold->normal;
-	manifold->points[0].localPoint1 = b2MulT(xf1, position);
-	manifold->points[0].localPoint2 = b2MulT(xf2, position);
+	manifold->normal = b2Mul(poly->m_R, d);
+	manifold->points[0].position = circle->m_position - radius * manifold->normal;
 	manifold->points[0].separation = dist - radius;
-	manifold->points[0].id.features.referenceEdge = 0;
-	manifold->points[0].id.features.flip = 0;
 }

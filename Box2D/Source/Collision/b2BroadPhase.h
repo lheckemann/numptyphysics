@@ -31,15 +31,8 @@ Bullet (http:/www.bulletphysics.com).
 #include "b2PairManager.h"
 #include <climits>
 
-#ifdef TARGET_FLOAT32_IS_FIXED
-#define	B2BROADPHASE_MAX	(USHRT_MAX/2)
-#else
-#define	B2BROADPHASE_MAX	USHRT_MAX
-
-#endif
-
-const uint16 b2_invalid = B2BROADPHASE_MAX;
-const uint16 b2_nullEdge = B2BROADPHASE_MAX;
+const uint16 b2_invalid = USHRT_MAX;
+const uint16 b2_nullEdge = USHRT_MAX;
 struct b2BoundValues;
 
 struct b2Bound
@@ -129,7 +122,7 @@ public:
 
 inline bool b2BroadPhase::InRange(const b2AABB& aabb) const
 {
-	b2Vec2 d = b2Max(aabb.lowerBound - m_worldAABB.upperBound, m_worldAABB.lowerBound - aabb.upperBound);
+	b2Vec2 d = b2Max(aabb.minVertex - m_worldAABB.maxVertex, m_worldAABB.minVertex - aabb.maxVertex);
 	return b2Max(d.x, d.y) < 0.0f;
 }
 

@@ -22,7 +22,6 @@ class Path;
 
 class Canvas
 {
-  typedef void* State;
 public:
   Canvas( int w, int h );
   virtual ~Canvas();
@@ -36,9 +35,8 @@ public:
   void setBackground( Canvas* bg );
   void clear();
   void clear( const Rect& r );
-  void fade( const Rect& r );
+  void fade();
   Canvas* scale( int factor ) const;
-  void scale( int w, int h );
   void drawImage( Canvas *canvas, int x, int y );
   void drawPixel( int x, int y, int c );
   int  readPixel( int x, int y ) const;
@@ -46,8 +44,11 @@ public:
   void drawPath( const Path& path, int color, bool thick=false );
   void drawRect( int x, int y, int w, int h, int c, bool fill=true );
   void drawRect( const Rect& r, int c, bool fill=true );
+  void drawWorldLine( b2Vec2 pos1, b2Vec2 pos2, int color, bool thick=false );
+  void drawWorldPath( const Path& path, int color, bool thick=false );
   int writeBMP( const char* filename ) const;
 protected:
+  typedef void* State;
   Canvas( State state=NULL );
   State   m_state;
   int     m_bgColour;

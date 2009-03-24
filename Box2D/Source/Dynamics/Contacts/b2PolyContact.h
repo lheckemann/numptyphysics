@@ -23,16 +23,16 @@
 
 class b2BlockAllocator;
 
-class b2PolygonContact : public b2Contact
+class b2PolyContact : public b2Contact
 {
 public:
 	static b2Contact* Create(b2Shape* shape1, b2Shape* shape2, b2BlockAllocator* allocator);
 	static void Destroy(b2Contact* contact, b2BlockAllocator* allocator);
 
-	b2PolygonContact(b2Shape* shape1, b2Shape* shape2);
-	~b2PolygonContact() {}
+	b2PolyContact(b2Shape* shape1, b2Shape* shape2);
+	~b2PolyContact() {}
 
-	void Evaluate(b2ContactListener* listener);
+	void Evaluate();
 	b2Manifold* GetManifolds()
 	{
 		return &m_manifold;

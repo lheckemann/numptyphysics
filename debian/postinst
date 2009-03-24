@@ -15,7 +15,3 @@ fi
 if [ -x /usr/bin/gtk-update-icon-cache ]; then
  gtk-update-icon-cache --force /usr/share/icons/hicolor
 fi
-
-#DEBHELPER#
-
-exit 0

@@ -26,7 +26,7 @@ class Segment
 public:
   Segment( const Vec2& p1, const Vec2& p2 )
     : m_p1(p1), m_p2(p2) {}
-  float32 distanceTo( const Vec2& p );
+  float distanceTo( const Vec2& p );
 private:
   Vec2 m_p1, m_p2;
 };
@@ -37,12 +37,11 @@ class Path : public Array<Vec2>
 public:
   Path();
   Path( int n, Vec2* p );
-  Path( const char *ptlist );
 
   void makeRelative();
   Path& translate(const Vec2& xlate);
   Path& rotate(const b2Mat22& rot);
-  Path& scale(float32 factor);
+  Path& scale(float factor);
 
   inline Vec2& origin() { return at(0); }
 
@@ -94,11 +93,11 @@ public:
   inline Vec2& first() { return at(0); }
   inline Vec2& last() { return at(size()-1); }
 
-  void simplify( float32 threshold );
+  void simplify( float threshold );
   Rect bbox() const;
 
  private:
-  void simplifySub( int first, int last, float32 threshold, bool* keepflags );  
+  void simplifySub( int first, int last, float threshold, bool* keepflags );  
 };
 
 #endif //PATH_H

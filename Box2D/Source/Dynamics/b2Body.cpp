@@ -19,22 +19,108 @@
 #include "b2Body.h"
 #include "b2World.h"
 #include "Joints/b2Joint.h"
-#include "../Collision/Shapes/b2Shape.h"
+#include "Contacts/b2Contact.h"
+#include "../Collision/b2Shape.h"
 
 b2Body::b2Body(const b2BodyDef* bd, b2World* world)
 {
-	b2Assert(world->m_lock == false);
-
 	m_flags = 0;
+	if (bd->isFast)
+	{
+		m_flags |= e_fastFlag;
+	}
+	m_position = bd->position;
+	m_rotation = bd->rotation;
+	m_R.Set(m_rotation);
+	m_position0 = m_position;
+	m_rotation0 = m_rotation;
+	m_world = world;
 
-	if (bd->isBullet)
+	m_linearDamping = b2Clamp(1.0f - bd->linearDamping, 0.0f, 1.0f);
+	m_angularDamping = b2Clamp(1.0f - bd->angularDamping, 0.0f, 1.0f);
+
+	m_force.Set(0.0f, 0.0f);
+	m_torque = 0.0f;
+
+	m_mass = 0.0f;
+
+	b2MassData massDatas[b2_maxShapesPerBody];
+
+	// Compute the shape mass properties, the bodies total mass and COM.
+	m_shapeCount = 0;
+	m_center.Set(0.0f, 0.0f);
+	for (int32 i = 0; i < b2_maxShapesPerBody; ++i)
 	{
-		m_flags |= e_bulletFlag;
+		const b2ShapeDef* sd = bd->shapes[i];
+		if (sd == NULL) break;
+		b2MassData* massData = massDatas + i;
+		sd->ComputeMass(massData);
+		m_mass += massData->mass;
+		m_center += massData->mass * (sd->localPosition + massData->center);
+		++m_shapeCount;
 	}
-	if (bd->fixedRotation)
+
+	// Compute center of mass, and shift the origin to the COM.
+	if (m_mass > 0.0f)
 	{
-		m_flags |= e_fixedRotationFlag;
+		m_center *= 1.0f / m_mass;
+		m_position += b2Mul(m_R, m_center);
 	}
+	else
+	{
+		m_flags |= e_staticFlag;
+	}
+
+	// Compute the moment of inertia.
+	m_I = 0.0f;
+	for (int32 i = 0; i < m_shapeCount; ++i)
+	{
+		const b2ShapeDef* sd = bd->shapes[i];
+		b2MassData* massData = massDatas + i;
+		m_I += massData->I;
+		b2Vec2 r = sd->localPosition + massData->center - m_center;
+		m_I += massData->mass * b2Dot(r, r);
+	}
+
+	if (m_mass > 0.0f)
+	{
+		m_invMass = 1.0f / m_mass;
+	}
+	else
+	{
+		m_invMass = 0.0f;
+	}
+
+	if (m_I > 0.0f && bd->preventRotation == false)
+	{
+		m_invI = 1.0f / m_I;
+	}
+	else
+	{
+		m_I = 0.0f;
+		m_invI = 0.0f;
+	}
+
+	// Compute the center of mass velocity.
+	m_linearVelocity = bd->linearVelocity + b2Cross(bd->angularVelocity, m_center);
+	m_angularVelocity = bd->angularVelocity;
+
+	m_jointList = NULL;
+	m_contactList = NULL;
+	m_prev = NULL;
+	m_next = NULL;
+
+	// Create the shapes.
+	m_shapeList = NULL;
+	for (int32 i = 0; i < m_shapeCount; ++i)
+	{
+		const b2ShapeDef* sd = bd->shapes[i];
+		b2Shape* shape = b2Shape::Create(sd, this, m_center);
+		shape->m_next = m_shapeList;
+		m_shapeList = shape;
+	}
+
+	m_sleepTime = 0.0f;
 	if (bd->allowSleep)
 	{
 		m_flags |= e_allowSleepFlag;
@@ -44,351 +130,95 @@ b2Body::b2Body(const b2BodyDef* bd, b2World* world)
 		m_flags |= e_sleepFlag;
 	}
 
-	m_world = world;
-
-	m_xf.position = bd->position;
-	m_xf.R.Set(bd->angle);
-
-	m_sweep.localCenter = bd->massData.center;
-	m_sweep.t0 = 1.0f;
-	m_sweep.a0 = m_sweep.a = bd->angle;
-	m_sweep.c0 = m_sweep.c = b2Mul(m_xf, m_sweep.localCenter);
-
-	m_jointList = NULL;
-	m_contactList = NULL;
-	m_prev = NULL;
-	m_next = NULL;
-
-	m_linearDamping = bd->linearDamping;
-	m_angularDamping = bd->angularDamping;
-
-	m_force.Set(0.0f, 0.0f);
-	m_torque = 0.0f;
-
-	m_linearVelocity.SetZero();
-	m_angularVelocity = 0.0f;
-
-	m_sleepTime = 0.0f;
-
-	m_invMass = 0.0f;
-	m_I = 0.0f;
-	m_invI = 0.0f;
-
-	m_mass = bd->massData.mass;
-
-	if (m_mass > 0.0f)
+	if ((m_flags & e_sleepFlag)  || m_invMass == 0.0f)
 	{
-		m_invMass = 1.0f / m_mass;
-	}
-
-	if ((m_flags & b2Body::e_fixedRotationFlag) == 0)
-	{
-		m_I = bd->massData.I;
-	}
-	
-	if (m_I > 0.0f)
-	{
-		m_invI = 1.0f / m_I;
-	}
-
-	if (m_invMass == 0.0f && m_invI == 0.0f)
-	{
-		m_type = e_staticType;
-	}
-	else
-	{
-		m_type = e_dynamicType;
+		m_linearVelocity.Set(0.0f, 0.0f);
+		m_angularVelocity = 0.0f;
 	}
 
 	m_userData = bd->userData;
-
-	m_shapeList = NULL;
-	m_shapeCount = 0;
 }
 
 b2Body::~b2Body()
 {
-	b2Assert(m_world->m_lock == false);
-	// shapes and joints are destroyed in b2World::Destroy
-}
-
-b2Shape* b2Body::CreateShape(b2ShapeDef* def)
-{
-	b2Assert(m_world->m_lock == false);
-	if (m_world->m_lock == true)
+	b2Shape* s = m_shapeList;
+	while (s)
 	{
-		return NULL;
-	}
+		b2Shape* s0 = s;
+		s = s->m_next;
 
-	b2Shape* s = b2Shape::Create(def, &m_world->m_blockAllocator);
-
-	s->m_next = m_shapeList;
-	m_shapeList = s;
-	++m_shapeCount;
-
-	s->m_body = this;
-
-	// Add the shape to the world's broad-phase.
-	s->CreateProxy(m_world->m_broadPhase, m_xf);
-
-	// Compute the sweep radius for CCD.
-	s->UpdateSweepRadius(m_sweep.localCenter);
-
-	return s;
-}
-
-void b2Body::DestroyShape(b2Shape* s)
-{
-	b2Assert(m_world->m_lock == false);
-	if (m_world->m_lock == true)
-	{
-		return;
-	}
-
-	b2Assert(s->GetBody() == this);
-	s->DestroyProxy(m_world->m_broadPhase);
-
-	b2Assert(m_shapeCount > 0);
-	b2Shape** node = &m_shapeList;
-	bool found = false;
-	while (*node != NULL)
-	{
-		if (*node == s)
-		{
-			*node = s->m_next;
-			found = true;
-			break;
-		}
-
-		node = &(*node)->m_next;
-	}
-
-	// You tried to remove a shape that is not attached to this body.
-	b2Assert(found);
-
-	s->m_body = NULL;
-	s->m_next = NULL;
-
-	--m_shapeCount;
-
-	b2Shape::Destroy(s, &m_world->m_blockAllocator);
-}
-
-// TODO_ERIN adjust linear velocity and torque to account for movement of center.
-void b2Body::SetMass(const b2MassData* massData)
-{
-	b2Assert(m_world->m_lock == false);
-	if (m_world->m_lock == true)
-	{
-		return;
-	}
-
-	m_invMass = 0.0f;
-	m_I = 0.0f;
-	m_invI = 0.0f;
-
-	m_mass = massData->mass;
-
-	if (m_mass > 0.0f)
-	{
-		m_invMass = 1.0f / m_mass;
-	}
-
-	if ((m_flags & b2Body::e_fixedRotationFlag) == 0)
-	{
-		m_I = massData->I;
-	}
-
-	if (m_I > 0.0f)
-	{
-		m_invI = 1.0f / m_I;
-	}
-
-	// Move center of mass.
-	m_sweep.localCenter = massData->center;
-	m_sweep.c0 = m_sweep.c = b2Mul(m_xf, m_sweep.localCenter);
-
-	// Update the sweep radii of all child shapes.
-	for (b2Shape* s = m_shapeList; s; s = s->m_next)
-	{
-		s->UpdateSweepRadius(m_sweep.localCenter);
-	}
-
-	int16 oldType = m_type;
-	if (m_invMass == 0.0f && m_invI == 0.0f)
-	{
-		m_type = e_staticType;
-	}
-	else
-	{
-		m_type = e_dynamicType;
-	}
-
-	// If the body type changed, we need to refilter the broad-phase proxies.
-	if (oldType != m_type)
-	{
-		for (b2Shape* s = m_shapeList; s; s = s->m_next)
-		{
-			s->RefilterProxy(m_world->m_broadPhase, m_xf);
-		}
+		b2Shape::Destroy(s0);
 	}
 }
 
-// TODO_ERIN adjust linear velocity and torque to account for movement of center.
-void b2Body::SetMassFromShapes()
+void b2Body::SetOriginPosition(const b2Vec2& position, float rotation)
 {
-	b2Assert(m_world->m_lock == false);
-	if (m_world->m_lock == true)
-	{
-		return;
-	}
-
-	// Compute mass data from shapes. Each shape has its own density.
-	m_mass = 0.0f;
-	m_invMass = 0.0f;
-	m_I = 0.0f;
-	m_invI = 0.0f;
-
-	b2Vec2 center = b2Vec2_zero;
-	for (b2Shape* s = m_shapeList; s; s = s->m_next)
-	{
-		b2MassData massData;
-		s->ComputeMass(&massData);
-		m_mass += massData.mass;
-		center += massData.mass * massData.center;
-		m_I += massData.I;
-	}
-
-	// Compute center of mass, and shift the origin to the COM.
-	if (m_mass > 0.0f)
-	{
-		m_invMass = 1.0f / m_mass;
-		center *= m_invMass;
-	}
-
-	if (m_I > 0.0f && (m_flags & e_fixedRotationFlag) == 0)
-	{
-		// Center the inertia about the center of mass.
-		m_I -= m_mass * b2Dot(center, center);
-		b2Assert(m_I > 0.0f);
-		m_invI = 1.0f / m_I;
-	}
-	else
-	{
-		m_I = 0.0f;
-		m_invI = 0.0f;
-	}
-
-	// Move center of mass.
-	m_sweep.localCenter = center;
-	m_sweep.c0 = m_sweep.c = b2Mul(m_xf, m_sweep.localCenter);
-
-	// Update the sweep radii of all child shapes.
-	for (b2Shape* s = m_shapeList; s; s = s->m_next)
-	{
-		s->UpdateSweepRadius(m_sweep.localCenter);
-	}
-
-	int16 oldType = m_type;
-	if (m_invMass == 0.0f && m_invI == 0.0f)
-	{
-		m_type = e_staticType;
-	}
-	else
-	{
-		m_type = e_dynamicType;
-	}
-
-	// If the body type changed, we need to refilter the broad-phase proxies.
-	if (oldType != m_type)
-	{
-		for (b2Shape* s = m_shapeList; s; s = s->m_next)
-		{
-			s->RefilterProxy(m_world->m_broadPhase, m_xf);
-		}
-	}
-}
-
-bool b2Body::SetXForm(const b2Vec2& position, float32 angle)
-{
-	b2Assert(m_world->m_lock == false);
-	if (m_world->m_lock == true)
-	{
-		return true;
-	}
-
 	if (IsFrozen())
 	{
-		return false;
+		return;
 	}
 
-	m_xf.R.Set(angle);
-	m_xf.position = position;
+	m_rotation = rotation;
+	m_R.Set(m_rotation);
+	m_position = position + b2Mul(m_R, m_center);
 
-	m_sweep.c0 = m_sweep.c = b2Mul(m_xf, m_sweep.localCenter);
-	m_sweep.a0 = m_sweep.a = angle;
+	m_position0 = m_position;
+	m_rotation0 = m_rotation;
 
-	bool freeze = false;
 	for (b2Shape* s = m_shapeList; s; s = s->m_next)
 	{
-		bool inRange = s->Synchronize(m_world->m_broadPhase, m_xf, m_xf);
-
-		if (inRange == false)
-		{
-			freeze = true;
-			break;
-		}
+		s->Synchronize(m_position, m_R, m_position, m_R);
 	}
 
-	if (freeze == true)
-	{
-		m_flags |= e_frozenFlag;
-		m_linearVelocity.SetZero();
-		m_angularVelocity = 0.0f;
-		for (b2Shape* s = m_shapeList; s; s = s->m_next)
-		{
-			s->DestroyProxy(m_world->m_broadPhase);
-		}
-
-		// Failure
-		return false;
-	}
-
-	// Success
 	m_world->m_broadPhase->Commit();
-	return true;
 }
 
-bool b2Body::SynchronizeShapes()
+void b2Body::SetCenterPosition(const b2Vec2& position, float rotation)
 {
-	b2XForm xf1;
-	xf1.R.Set(m_sweep.a0);
-	xf1.position = m_sweep.c0 - b2Mul(xf1.R, m_sweep.localCenter);
+	if (IsFrozen())
+	{
+		return;
+	}
 
-	bool inRange = true;
+	m_rotation = rotation;
+	m_R.Set(m_rotation);
+	m_position = position;
+
+	m_position0 = m_position;
+	m_rotation0 = m_rotation;
+
 	for (b2Shape* s = m_shapeList; s; s = s->m_next)
 	{
-		inRange = s->Synchronize(m_world->m_broadPhase, xf1, m_xf);
-		if (inRange == false)
-		{
-			break;
-		}
+		s->Synchronize(m_position, m_R, m_position, m_R);
 	}
 
-	if (inRange == false)
+	m_world->m_broadPhase->Commit();
+}
+
+void b2Body::SynchronizeShapes()
+{
+	b2Mat22 R0(m_rotation0);
+	for (b2Shape* s = m_shapeList; s; s = s->m_next)
 	{
-		m_flags |= e_frozenFlag;
-		m_linearVelocity.SetZero();
-		m_angularVelocity = 0.0f;
-		for (b2Shape* s = m_shapeList; s; s = s->m_next)
-		{
-			s->DestroyProxy(m_world->m_broadPhase);
-		}
-
-		// Failure
-		return false;
+		s->Synchronize(m_position0, R0, m_position, m_R);
 	}
+}
 
-	// Success
-	return true;
+void b2Body::QuickSyncShapes()
+{
+	for (b2Shape* s = m_shapeList; s; s = s->m_next)
+	{
+		s->QuickSync(m_position, m_R);
+	}
+}
+
+void b2Body::Freeze()
+{
+	m_flags |= e_frozenFlag;
+	m_linearVelocity.SetZero();
+	m_angularVelocity = 0.0f;
+	for (b2Shape* s = m_shapeList; s; s = s->m_next)
+	{
+		s->DestroyProxy();
+	}
 }

@@ -24,16 +24,12 @@
 #include <SDL/SDL_image.h>
 
 #define Window X11Window //oops
-#define Font X11Font //oops
 #include <SDL/SDL_syswm.h>
 #ifndef WIN32
 #include <X11/X.h>
 #include <X11/Xlib.h>
 #endif
 #undef Window
-
-// zoomer.cpp
-extern SDL_Surface *zoomSurface(SDL_Surface * src, double zoomx, double zoomy);
 
 
 // extract RGB colour components as 8bit values from RGB888
@@ -149,10 +145,10 @@ struct AlphaBrush<PIX,3>
 
 
 template <typename PIX, unsigned THICK> 
-inline void renderLine( void *buf,
-			int byteStride,
-			int x1, int y1, int x2, int y2,
-			PIX color )
+void renderLine( void *buf,
+		 int byteStride,
+		 int x1, int y1, int x2, int y2,
+		 PIX color )
 {  
   PIX *pix = (PIX*)((char*)buf+byteStride*y1) + x1;
   int lg_delta, sh_delta, cycle, lg_step, sh_step;
@@ -162,10 +158,10 @@ inline void renderLine( void *buf,
 
   lg_delta = x2 - x1;
   sh_delta = y2 - y1;
-  lg_step = Sgn(lg_delta);
-  lg_delta = Abs(lg_delta);
-  sh_step = Sgn(sh_delta);
-  sh_delta = Abs(sh_delta);
+  lg_step = SGN(lg_delta);
+  lg_delta = ABS(lg_delta);
+  sh_step = SGN(sh_delta);
+  sh_delta = ABS(sh_delta);
   if ( sh_step < 0 )  pixStride = -pixStride;
 
   // in theory should be able to do this with just a single step
@@ -190,7 +186,7 @@ inline void renderLine( void *buf,
   } else {
     cycle = sh_delta >> 1;
     alpha = ALPHA_MAX >> 1;
-    alpha_step = -lg_step * Abs(ALPHA_MAX * lg_delta/(sh_delta+1));
+    alpha_step = -lg_step * ABS(ALPHA_MAX * lg_delta/(sh_delta+1));
     alpha_reset = alpha_step < 0 ? ALPHA_MAX : 0;
     int count = sh_step>0 ? y2-y1 : y1-y2;
     while ( count-- ) {
@@ -215,22 +211,12 @@ Canvas::Canvas( int w, int h )
     m_bgColour(0),
     m_bgImage(NULL)
 {
-  switch (SDL_GetVideoInfo()->vfmt->BitsPerPixel) {
-  case 16:
-  case 32:
-    m_state = SDL_CreateRGBSurface( SDL_SWSURFACE, w, h, 
-				    SDL_GetVideoInfo()->vfmt->BitsPerPixel,
-				    SDL_GetVideoInfo()->vfmt->Rmask,
-				    SDL_GetVideoInfo()->vfmt->Gmask,
-				    SDL_GetVideoInfo()->vfmt->Bmask,
-				    SDL_GetVideoInfo()->vfmt->Amask );
-    break;
-  default:
-    // eg: dummy vid driver reports 8bpp
-    m_state = SDL_CreateRGBSurface( SDL_SWSURFACE, w, h, 32,
-				    0xFF0000, 0x00FF00, 0x0000FF, 0xFF000000 );
-    break;
-  }
+  m_state = SDL_CreateRGBSurface( SDL_SWSURFACE, w, h, 
+				  SDL_GetVideoInfo()->vfmt->BitsPerPixel,
+				  SDL_GetVideoInfo()->vfmt->Rmask,
+				  SDL_GetVideoInfo()->vfmt->Gmask,
+				  SDL_GetVideoInfo()->vfmt->Bmask,
+				  SDL_GetVideoInfo()->vfmt->Amask );
   resetClip();
 }
 
@@ -301,34 +287,23 @@ void Canvas::clear()
   }
 }
 
-void Canvas::fade( const Rect& rr ) 
+void Canvas::fade() 
 {
   Uint32 bpp;
-  Rect r = rr;
-  r.clipTo( m_clip );
+  int count = width()*height();
   bpp = SURFACE(this)->format->BytesPerPixel;
   char* row = (char*)SURFACE(this)->pixels;
-  int pixStride = width();
-  int w = r.br.x - r.tl.x + 1;
-  int h = r.br.y - r.tl.y + 1;
-  row += (r.tl.x + r.tl.y * pixStride) * bpp;
 
   SDL_LockSurface(SURFACE(this));
   switch ( bpp ) {
   case 2: 
-    for ( int r=h; r>0; r-- ) {
-      for ( int i=0;i<w;i++) {
-	((Uint16*)row)[i] = (((Uint16*)row)[i]>>1) & 0x7bef;
-      }
-      row += pixStride * bpp;
+    for ( int i=0;i<count;i++) {
+      ((Uint16*)row)[i] = (((Uint16*)row)[i]>>1) & 0x7bef;
     }
     break;
   case 4:
-    for ( int r=h; r>0; r-- ) {
-      for ( int i=0;i<w;i++) {
-	((Uint32*)row)[i] = (((Uint32*)row)[i]>>1) & 0x7f7f7f;
-      }
-      row += pixStride * bpp;
+    for ( int i=0;i<count;i++) {
+      ((Uint32*)row)[i] = (((Uint32*)row)[i]>>1) & 0x7f7f7f;
     }
     break;
   }
@@ -382,20 +357,6 @@ Canvas* Canvas::scale( int factor ) const
     }
   }
   return c;
-}
-
-
-void Canvas::scale( int w, int h )
-{
-  if ( w!=width() && h!=height() ) {
-    SDL_Surface *s = zoomSurface( SURFACE(this),
-				  (double)w/(double)width(),
-				  (double)h/(double)height() );
-    if ( s ) {
-      SDL_FreeSurface( SURFACE(this) );
-      m_state = s;
-    }
-  }
 }
 
 
@@ -455,10 +416,10 @@ void Canvas::drawLine( int x1, int y1, int x2, int y2, int color )
   int lg_delta, sh_delta, cycle, lg_step, sh_step;
   lg_delta = x2 - x1;
   sh_delta = y2 - y1;
-  lg_step = Sgn(lg_delta);
-  lg_delta = Abs(lg_delta);
-  sh_step = Sgn(sh_delta);
-  sh_delta = Abs(sh_delta);
+  lg_step = SGN(lg_delta);
+  lg_delta = ABS(lg_delta);
+  sh_step = SGN(sh_delta);
+  sh_delta = ABS(sh_delta);
   if (sh_delta < lg_delta) {
     cycle = lg_delta >> 1;
     while (x1 != x2) {
@@ -507,26 +468,14 @@ void Canvas::drawPath( const Path& path, int color, bool thick )
       const Vec2& p1 = path.point(i-1);
       switch ( SURFACE(this)->format->BytesPerPixel ) {
       case 2:      
-	if ( thick ) {
-	  renderLine<Uint16,3>( SURFACE(this)->pixels,
-				SURFACE(this)->pitch,
-				p1.x, p1.y, p2.x, p2.y, color );
-	} else {
-	  renderLine<Uint16,1>( SURFACE(this)->pixels,
-				SURFACE(this)->pitch,
-				p1.x, p1.y, p2.x, p2.y, color );
-	}
+	renderLine<Uint16,3>( SURFACE(this)->pixels,
+			      SURFACE(this)->pitch,
+			      p1.x, p1.y, p2.x, p2.y, color );
 	break;
       case 4:
-	if ( thick ) {
-	  renderLine<Uint32,3>( SURFACE(this)->pixels,
-				SURFACE(this)->pitch,
-				p1.x, p1.y, p2.x, p2.y, color );
-	} else {
-	  renderLine<Uint32,1>( SURFACE(this)->pixels,
-				SURFACE(this)->pitch,
-				p1.x, p1.y, p2.x, p2.y, color );
-	}
+	renderLine<Uint32,3>( SURFACE(this)->pixels,
+			      SURFACE(this)->pitch,
+			      p1.x, p1.y, p2.x, p2.y, color );
 	break;
       }
     } else {
@@ -560,6 +509,58 @@ void Canvas::drawRect( const Rect& r, int c, bool fill )
   drawRect( r.tl.x, r.tl.y, r.br.x-r.tl.x, r.br.y-r.tl.y, c, fill );
 }
 
+void Canvas::drawWorldLine( b2Vec2 pos1, b2Vec2 pos2, int color, bool thick )
+{
+  if ( pos1.y < -5.0 || pos1.y >= 45.0
+       || pos2.y < -5.0 || pos2.y >= 45.0 
+       || pos1.x <= -40.0 || pos1.x >= 40.0
+       || pos2.x <= -40.0 || pos2.x >= 40.0 ) {
+    //printf("drop %f,%f-%f,%f\n",pos1.x,pos1.y,pos2.x,pos2.y);
+    return; 
+  } 
+
+  if ( thick ) {
+    b2Vec2 dir = (pos2 - pos1);
+    dir.Normalize();
+    b2Vec2 norm( -dir.y, dir.x );
+    norm = 1/PIXELS_PER_METREf * norm;
+    
+    drawLine( (int)(pos1.x*PIXELS_PER_METREf+CANVAS_WIDTHf/2.0),
+	      (int)(CANVAS_HEIGHTf-CANVAS_GROUNDf-pos1.y*PIXELS_PER_METREf),
+	      (int)(pos2.x*PIXELS_PER_METREf+CANVAS_WIDTHf/2.0),
+	      (int)(CANVAS_HEIGHTf-CANVAS_GROUNDf-pos2.y*PIXELS_PER_METREf),
+	      color );	
+    pos1 += norm; pos2 += norm;
+    drawLine( (int)(pos1.x*PIXELS_PER_METREf+CANVAS_WIDTHf/2.0),
+	      (int)(CANVAS_HEIGHTf-CANVAS_GROUNDf-pos1.y*PIXELS_PER_METREf),
+	      (int)(pos2.x*PIXELS_PER_METREf+CANVAS_WIDTHf/2.0),
+	      (int)(CANVAS_HEIGHTf-CANVAS_GROUNDf-pos2.y*PIXELS_PER_METREf),
+	      color );	
+    pos1 -= norm; pos2 -= norm;
+    pos1 -= norm; pos2 -= norm;
+    drawLine( (int)(pos1.x*PIXELS_PER_METREf+CANVAS_WIDTHf/2.0),
+	      (int)(CANVAS_HEIGHTf-CANVAS_GROUNDf-pos1.y*PIXELS_PER_METREf),
+	      (int)(pos2.x*PIXELS_PER_METREf+CANVAS_WIDTHf/2.0),
+	      (int)(CANVAS_HEIGHTf-CANVAS_GROUNDf-pos2.y*PIXELS_PER_METREf),
+	      color );	
+  } else {
+    drawLine( (int)(pos1.x*PIXELS_PER_METREf+CANVAS_WIDTHf/2.0),
+	      (int)(CANVAS_HEIGHTf-CANVAS_GROUNDf-pos1.y*PIXELS_PER_METREf),
+	      (int)(pos2.x*PIXELS_PER_METREf+CANVAS_WIDTHf/2.0),
+	      (int)(CANVAS_HEIGHTf-CANVAS_GROUNDf-pos2.y*PIXELS_PER_METREf),
+	      color );	
+  }
+
+}
+
+
+void Canvas::drawWorldPath( const Path& path, int color, bool thick )
+{
+  for ( int i=1; i<path.numPoints(); i++ ) {
+    drawWorldLine( path.point(i-1), path.point(i), color, thick );
+  }  
+}
+
 
 
 Window::Window( int w, int h, const char* title, const char* winclass )
@@ -573,14 +574,14 @@ Window::Window( int w, int h, const char* title, const char* winclass )
     SDL_WM_SetCaption( title, title );
   }
 #ifdef USE_HILDON
-  m_state = SDL_SetVideoMode( w, h, 16, SDL_SWSURFACE);//SDL_FULLSCREEN);
+  m_state = SDL_SetVideoMode( w, h, 16, SDL_SWSURFACE);
   SDL_WM_ToggleFullScreen( SURFACE(this) );
   SDL_ShowCursor( SDL_DISABLE );
 #else
   m_state = SDL_SetVideoMode( w, h, 0, SDL_SWSURFACE);
 #endif
   if ( SURFACE(this) == NULL ) {
-    throw "Unable to set video mode";
+    throw "Unable to set 800x480 video";
   }
   resetClip();
 
@@ -605,12 +606,12 @@ Window::Window( int w, int h, const char* title, const char* winclass )
 void Window::update( const Rect& r )
 {
   if ( r.tl.x < width() && r.tl.y < height() ) {
-    int x1 = Max( 0, r.tl.x );
-    int y1 = Max( 0, r.tl.y );
-    int x2 = Min( width()-1, r.br.x );
-    int y2 = Min( height()-1, r.br.y );
-    int w  = Max( 0, x2-x1 );
-    int h  = Max( 0, y2-y1 );
+    int x1 = MAX( 0, r.tl.x );
+    int y1 = MAX( 0, r.tl.y );
+    int x2 = MIN( width()-1, r.br.x );
+    int y2 = MIN( height()-1, r.br.y );
+    int w  = MAX( 0, x2-x1+1 );
+    int h  = MAX( 0, y2-y1+1 );
     if ( w > 0 && h > 0 ) {
       SDL_UpdateRect( SURFACE(this), x1, y1, w, h );
     }
@@ -652,7 +653,7 @@ void Window::setSubName( const char *sub )
   SDL_GetWMInfo( &sys );
 
   XChangeProperty( sys.info.x11.display,
-		   sys.info.x11.fswindow,
+		   sys.info.x11.wmwindow,
 		   XInternAtom (sys.info.x11.display, "_MB_WIN_SUB_NAME", False),
 		   XA_STRING, 8, PropModeReplace,
 		   (unsigned char*)sub, strlen(sub) );
@@ -663,12 +664,8 @@ void Window::setSubName( const char *sub )
 Image::Image( const char* file, bool alpha )
 {
   alpha = false;
-  std::string f( "data/" );
+  std::string f( DEFAULT_RESOURCE_PATH "/" );
   SDL_Surface* img = IMG_Load((f+file).c_str());
-  if ( !img ) {
-    f = std::string( DEFAULT_RESOURCE_PATH "/" );
-    img = IMG_Load((f+file).c_str());
-  }
   if ( img ) {
     printf("loaded image %s\n",(f+file).c_str());
     if ( alpha ) {

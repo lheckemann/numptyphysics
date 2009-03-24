@@ -18,7 +18,6 @@
 #define ARRAY_H
 
 #include "Common.h"
-#include <memory.h>
 
 template <typename T>
 class Array

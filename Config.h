@@ -17,16 +17,16 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include <sstream>
-#include "Common.h"
-#include "Os.h"
-
-#define WORLD_WIDTH  800
-#define WORLD_HEIGHT 480
+#define CANVAS_WIDTH  800
+#define CANVAS_HEIGHT 480
+#define CANVAS_GROUND 30
+#define CANVAS_WIDTHf  800.0f
+#define CANVAS_HEIGHTf 480.0f
+#define CANVAS_GROUNDf 30.0f
 #define PIXELS_PER_METREf 10.0f
 #define CLOSED_SHAPE_THREHOLDf 0.4f
 #define SIMPLIFY_THRESHOLDf 1.0f //PIXELs //(1.0/PIXELS_PER_METREf)
-#define MULTI_VERTEX_LIMIT 64
+#define MULTI_VERTEX_LIMIT (b2_maxShapesPerBody)
 
 #ifdef USE_HILDON //maemo
 #  define ITERATION_RATE    60 //fps
@@ -37,7 +37,7 @@
 #  define CLICK_TOLERANCE   16 //PIXELs 
 #else
 #  define ITERATION_RATE    60 //fps
-#  define RENDER_RATE       60 //fps
+#  define RENDER_RATE       30 //fps
 #  define SOLVER_ITERATIONS 10
 #  define JOINT_TOLERANCE   4.0f //PIXELs
 #  define SELECT_TOLERANCE  5.0f //PIXELS_PER_METREf)
@@ -49,6 +49,12 @@
 
 #define HIDE_STEPS (RENDER_RATE*4)
 
+#define COLOUR_RED     0xb80000
+#define COLOUR_YELLOW  0xffd700 
+#define COLOUR_BLUE    0x000077 
+#define COLOUR_GREEN   0x108710
+#define COLOUR_BLACK   0x101010
+#define COLOUR_BROWN   0x703010
 
 #ifndef INSTALL_BASE_PATH
 #  define INSTALL_BASE_PATH "/usr/share/numptyphysics"
@@ -59,11 +65,7 @@
 # ifdef USE_HILDON //maemo
 #  define USER_BASE_PATH "MyDocs/.games/NumptyPhysics"
 # else
-#  ifdef WIN32
-#   define USER_BASE_PATH ".\\data"
-#  else
-#   define USER_BASE_PATH ".numptyphysics"
-#  endif
+#  define USER_BASE_PATH ".numptyphysics"
 # endif
 #endif
 #define USER_LEVEL_PATH USER_BASE_PATH
@@ -74,35 +76,10 @@
 
 #define ICON_SCALE_FACTOR 4
 
-
-
-extern Rect FULLSCREEN_RECT;
-extern const Rect BOUNDS_RECT;
-extern int SCREEN_WIDTH;
-extern int SCREEN_HEIGHT;
-extern const int brushColours[];
-extern const int NUM_BRUSHES;
-#define RED_BRUSH       0
-#define YELLOW_BRUSH    1
-#define DEFAULT_BRUSH   2
-
-class Font;
-
 class Config
 {
  public:
-  static const std::string& userDataDir()
-  {
-    static const std::string d = std::string(getenv("HOME")) + Os::pathSep + USER_BASE_PATH;
-    return d;
-  }
-  static const std::string& planetRoot()
-  {
-    static const std::string d("http://xyz/planet.cgi");
-    return d;
-  }
-  static std::string findFile( const std::string& name );
-  static Font* font();
+  static int x;
 };
 
 #endif //CONFIG_H

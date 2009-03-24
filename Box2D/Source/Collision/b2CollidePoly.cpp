@@ -17,7 +17,7 @@
 */
 
 #include "b2Collision.h"
-#include "Shapes/b2PolygonShape.h"
+#include "b2Shape.h"
 
 struct ClipVertex
 {
@@ -60,60 +60,51 @@ static int32 ClipSegmentToLine(ClipVertex vOut[2], ClipVertex vIn[2],
 }
 
 // Find the separation between poly1 and poly2 for a give edge normal on poly1.
-static float32 EdgeSeparation(const b2PolygonShape* poly1, const b2XForm& xf1, int32 edge1,
-							  const b2PolygonShape* poly2, const b2XForm& xf2)
+static float32 EdgeSeparation(const b2PolyShape* poly1, int32 edge1, const b2PolyShape* poly2)
 {
-	int32 count1 = poly1->GetVertexCount();
-	const b2Vec2* vertices1 = poly1->GetVertices();
-	const b2Vec2* normals1 = poly1->GetNormals();
+	const b2Vec2* vert1s = poly1->m_vertices;
+	int32 count2 = poly2->m_vertexCount;
+	const b2Vec2* vert2s = poly2->m_vertices;
 
-	int32 count2 = poly2->GetVertexCount();
-	const b2Vec2* vertices2 = poly2->GetVertices();
-
-	b2Assert(0 <= edge1 && edge1 < count1);
-
-	// Convert normal from poly1's frame into poly2's frame.
-	b2Vec2 normal1World = b2Mul(xf1.R, normals1[edge1]);
-	b2Vec2 normal1 = b2MulT(xf2.R, normal1World);
+	// Convert normal from into poly2's frame.
+	b2Assert(edge1 < poly1->m_vertexCount);
+	b2Vec2 normal = b2Mul(poly1->m_R, poly1->m_normals[edge1]);
+	b2Vec2 normalLocal2 = b2MulT(poly2->m_R, normal);
 
 	// Find support vertex on poly2 for -normal.
-	int32 index = 0;
-	float32 minDot = B2_FLT_MAX;
-
+	int32 vertexIndex2 = 0;
+	float32 minDot = FLT_MAX;
 	for (int32 i = 0; i < count2; ++i)
 	{
-		float32 dot = b2Dot(vertices2[i], normal1);
+		float32 dot = b2Dot(vert2s[i], normalLocal2);
 		if (dot < minDot)
 		{
 			minDot = dot;
-			index = i;
+			vertexIndex2 = i;
 		}
 	}
 
-	b2Vec2 v1 = b2Mul(xf1, vertices1[edge1]);
-	b2Vec2 v2 = b2Mul(xf2, vertices2[index]);
-	float32 separation = b2Dot(v2 - v1, normal1World);
+	b2Vec2 v1 = poly1->m_position + b2Mul(poly1->m_R, vert1s[edge1]);
+	b2Vec2 v2 = poly2->m_position + b2Mul(poly2->m_R, vert2s[vertexIndex2]);
+	float32 separation = b2Dot(v2 - v1, normal);
 	return separation;
 }
 
 // Find the max separation between poly1 and poly2 using edge normals from poly1.
-static float32 FindMaxSeparation(int32* edgeIndex,
-								 const b2PolygonShape* poly1, const b2XForm& xf1,
-								 const b2PolygonShape* poly2, const b2XForm& xf2)
+static float32 FindMaxSeparation(int32* edgeIndex, const b2PolyShape* poly1, const b2PolyShape* poly2, bool conservative)
 {
-	int32 count1 = poly1->GetVertexCount();
-	const b2Vec2* normals1 = poly1->GetNormals();
+	int32 count1 = poly1->m_vertexCount;
 
-	// Vector pointing from the centroid of poly1 to the centroid of poly2.
-	b2Vec2 d = b2Mul(xf2, poly2->GetCentroid()) - b2Mul(xf1, poly1->GetCentroid());
-	b2Vec2 dLocal1 = b2MulT(xf1.R, d);
+	// Vector pointing from the origin of poly1 to the origin of poly2.
+	b2Vec2 d = poly2->m_position - poly1->m_position;
+	b2Vec2 dLocal1 = b2MulT(poly1->m_R, d);
 
 	// Find edge normal on poly1 that has the largest projection onto d.
 	int32 edge = 0;
-	float32 maxDot = -B2_FLT_MAX;
+	float32 maxDot = -FLT_MAX;
 	for (int32 i = 0; i < count1; ++i)
 	{
-		float32 dot = b2Dot(normals1[i], dLocal1);
+		float32 dot = b2Dot(poly1->m_normals[i], dLocal1);
 		if (dot > maxDot)
 		{
 			maxDot = dot;
@@ -122,24 +113,23 @@ static float32 FindMaxSeparation(int32* edgeIndex,
 	}
 
 	// Get the separation for the edge normal.
-	float32 s = EdgeSeparation(poly1, xf1, edge, poly2, xf2);
-	if (s > 0.0f)
+	float32 s = EdgeSeparation(poly1, edge, poly2);
+	if (s > 0.0f && conservative == false)
 	{
 		return s;
 	}
 
-	// Check the separation for the previous edge normal.
+	// Check the separation for the neighboring edges.
 	int32 prevEdge = edge - 1 >= 0 ? edge - 1 : count1 - 1;
-	float32 sPrev = EdgeSeparation(poly1, xf1, prevEdge, poly2, xf2);
-	if (sPrev > 0.0f)
+	float32 sPrev = EdgeSeparation(poly1, prevEdge, poly2);
+	if (sPrev > 0.0f && conservative == false)
 	{
 		return sPrev;
 	}
 
-	// Check the separation for the next edge normal.
 	int32 nextEdge = edge + 1 < count1 ? edge + 1 : 0;
-	float32 sNext = EdgeSeparation(poly1, xf1, nextEdge, poly2, xf2);
-	if (sNext > 0.0f)
+	float32 sNext = EdgeSeparation(poly1, nextEdge, poly2);
+	if (sNext > 0.0f && conservative == false)
 	{
 		return sNext;
 	}
@@ -166,7 +156,6 @@ static float32 FindMaxSeparation(int32* edgeIndex,
 		return s;
 	}
 
-	// Perform a local search for the best edge normal.
 	for ( ; ; )
 	{
 		if (increment == -1)
@@ -174,8 +163,8 @@ static float32 FindMaxSeparation(int32* edgeIndex,
 		else
 			edge = bestEdge + 1 < count1 ? bestEdge + 1 : 0;
 
-		s = EdgeSeparation(poly1, xf1, edge, poly2, xf2);
-		if (s > 0.0f)
+		s = EdgeSeparation(poly1, edge, poly2);
+		if (s > 0.0f && conservative == false)
 		{
 			return s;
 		}
@@ -195,48 +184,52 @@ static float32 FindMaxSeparation(int32* edgeIndex,
 	return bestSeparation;
 }
 
-static void FindIncidentEdge(ClipVertex c[2],
-							 const b2PolygonShape* poly1, const b2XForm& xf1, int32 edge1,
-							 const b2PolygonShape* poly2, const b2XForm& xf2)
+static void FindIncidentEdge(ClipVertex c[2], const b2PolyShape* poly1, int32 edge1, const b2PolyShape* poly2)
 {
-	int32 count1 = poly1->GetVertexCount();
-	const b2Vec2* normals1 = poly1->GetNormals();
+	int32 count1 = poly1->m_vertexCount;
+	const b2Vec2* vert1s = poly1->m_vertices;
+	int32 count2 = poly2->m_vertexCount;
+	const b2Vec2* vert2s = poly2->m_vertices;
 
-	int32 count2 = poly2->GetVertexCount();
-	const b2Vec2* vertices2 = poly2->GetVertices();
-	const b2Vec2* normals2 = poly2->GetNormals();
+	// Get the vertices associated with edge1.
+	int32 vertex11 = edge1;
+	int32 vertex12 = edge1 + 1 == count1 ? 0 : edge1 + 1;
 
-	b2Assert(0 <= edge1 && edge1 < count1);
-
-	// Get the normal of the reference edge in poly2's frame.
-	b2Vec2 normal1 = b2MulT(xf2.R, b2Mul(xf1.R, normals1[edge1]));
+	// Get the normal of edge1.
+	b2Vec2 normal1Local1 = b2Cross(vert1s[vertex12] - vert1s[vertex11], 1.0f);
+	normal1Local1.Normalize();
+	b2Vec2 normal1 = b2Mul(poly1->m_R, normal1Local1);
+	b2Vec2 normal1Local2 = b2MulT(poly2->m_R, normal1);
 
 	// Find the incident edge on poly2.
-	int32 index = 0;
-	float32 minDot = B2_FLT_MAX;
+	int32 vertex21 = 0, vertex22 = 0;
+	float32 minDot = FLT_MAX;
 	for (int32 i = 0; i < count2; ++i)
 	{
-		float32 dot = b2Dot(normal1, normals2[i]);
+		int32 i1 = i;
+		int32 i2 = i + 1 < count2 ? i + 1 : 0;
+
+		b2Vec2 normal2Local2 = b2Cross(vert2s[i2] - vert2s[i1], 1.0f);
+		normal2Local2.Normalize();
+		float32 dot = b2Dot(normal2Local2, normal1Local2);
 		if (dot < minDot)
 		{
 			minDot = dot;
-			index = i;
+			vertex21 = i1;
+			vertex22 = i2;
 		}
 	}
 
 	// Build the clip vertices for the incident edge.
-	int32 i1 = index;
-	int32 i2 = i1 + 1 < count2 ? i1 + 1 : 0;
+	c[0].v = poly2->m_position + b2Mul(poly2->m_R, vert2s[vertex21]);
+	c[0].id.features.referenceFace = (uint8)edge1;
+	c[0].id.features.incidentEdge = (uint8)vertex21;
+	c[0].id.features.incidentVertex = (uint8)vertex21;
 
-	c[0].v = b2Mul(xf2, vertices2[i1]);
-	c[0].id.features.referenceEdge = (uint8)edge1;
-	c[0].id.features.incidentEdge = (uint8)i1;
-	c[0].id.features.incidentVertex = 0;
-
-	c[1].v = b2Mul(xf2, vertices2[i2]);
-	c[1].id.features.referenceEdge = (uint8)edge1;
-	c[1].id.features.incidentEdge = (uint8)i2;
-	c[1].id.features.incidentVertex = 1;
+	c[1].v = poly2->m_position + b2Mul(poly2->m_R, vert2s[vertex22]);
+	c[1].id.features.referenceFace = (uint8)edge1;
+	c[1].id.features.incidentEdge = (uint8)vertex21;
+	c[1].id.features.incidentVertex = (uint8)vertex22;
 }
 
 // Find edge normal of max separation on A - return if separating axis is found
@@ -246,25 +239,24 @@ static void FindIncidentEdge(ClipVertex c[2],
 // Clip
 
 // The normal points from 1 to 2
-void b2CollidePolygons(b2Manifold* manifold,
-					  const b2PolygonShape* polyA, const b2XForm& xfA,
-					  const b2PolygonShape* polyB, const b2XForm& xfB)
+void b2CollidePoly(b2Manifold* manifold, const b2PolyShape* polyA, const b2PolyShape* polyB, bool conservative)
 {
+	NOT_USED(conservative);
+
 	manifold->pointCount = 0;
 
 	int32 edgeA = 0;
-	float32 separationA = FindMaxSeparation(&edgeA, polyA, xfA, polyB, xfB);
-	if (separationA > 0.0f)
+	float32 separationA = FindMaxSeparation(&edgeA, polyA, polyB, conservative);
+	if (separationA > 0.0f && conservative == false)
 		return;
 
 	int32 edgeB = 0;
-	float32 separationB = FindMaxSeparation(&edgeB, polyB, xfB, polyA, xfA);
-	if (separationB > 0.0f)
+	float32 separationB = FindMaxSeparation(&edgeB, polyB, polyA, conservative);
+	if (separationB > 0.0f && conservative == false)
 		return;
 
-	const b2PolygonShape* poly1;	// reference poly
-	const b2PolygonShape* poly2;	// incident poly
-	b2XForm xf1, xf2;
+	const b2PolyShape* poly1;	// reference poly
+	const b2PolyShape* poly2;	// incident poly
 	int32 edge1;		// reference edge
 	uint8 flip;
 	const float32 k_relativeTol = 0.98f;
@@ -275,8 +267,6 @@ void b2CollidePolygons(b2Manifold* manifold,
 	{
 		poly1 = polyB;
 		poly2 = polyA;
-		xf1 = xfB;
-		xf2 = xfA;
 		edge1 = edgeB;
 		flip = 1;
 	}
@@ -284,28 +274,26 @@ void b2CollidePolygons(b2Manifold* manifold,
 	{
 		poly1 = polyA;
 		poly2 = polyB;
-		xf1 = xfA;
-		xf2 = xfB;
 		edge1 = edgeA;
 		flip = 0;
 	}
 
 	ClipVertex incidentEdge[2];
-	FindIncidentEdge(incidentEdge, poly1, xf1, edge1, poly2, xf2);
+	FindIncidentEdge(incidentEdge, poly1, edge1, poly2);
 
-	int32 count1 = poly1->GetVertexCount();
-	const b2Vec2* vertices1 = poly1->GetVertices();
+	int32 count1 = poly1->m_vertexCount;
+	const b2Vec2* vert1s = poly1->m_vertices;
 
-	b2Vec2 v11 = vertices1[edge1];
-	b2Vec2 v12 = edge1 + 1 < count1 ? vertices1[edge1+1] : vertices1[0];
+	b2Vec2 v11 = vert1s[edge1];
+	b2Vec2 v12 = edge1 + 1 < count1 ? vert1s[edge1+1] : vert1s[0];
 
 	b2Vec2 dv = v12 - v11;
-	b2Vec2 sideNormal = b2Mul(xf1.R, v12 - v11);
+	b2Vec2 sideNormal = b2Mul(poly1->m_R, v12 - v11);
 	sideNormal.Normalize();
 	b2Vec2 frontNormal = b2Cross(sideNormal, 1.0f);
 	
-	v11 = b2Mul(xf1, v11);
-	v12 = b2Mul(xf1, v12);
+	v11 = poly1->m_position + b2Mul(poly1->m_R, v11);
+	v12 = poly1->m_position + b2Mul(poly1->m_R, v12);
 
 	float32 frontOffset = b2Dot(frontNormal, v11);
 	float32 sideOffset1 = -b2Dot(sideNormal, v11);
@@ -336,12 +324,11 @@ void b2CollidePolygons(b2Manifold* manifold,
 	{
 		float32 separation = b2Dot(frontNormal, clipPoints2[i].v) - frontOffset;
 
-		if (separation <= 0.0f)
+		if (separation <= 0.0f || conservative == true)
 		{
-			b2ManifoldPoint* cp = manifold->points + pointCount;
+			b2ContactPoint* cp = manifold->points + pointCount;
 			cp->separation = separation;
-			cp->localPoint1 = b2MulT(xfA, clipPoints2[i].v);
-			cp->localPoint2 = b2MulT(xfB, clipPoints2[i].v);
+			cp->position = clipPoints2[i].v;
 			cp->id = clipPoints2[i].id;
 			cp->id.features.flip = flip;
 			++pointCount;
