@@ -616,6 +616,7 @@ bool Scene::activateStroke( Stroke *s )
 {
   activate(s);
   m_recorder.activateStroke( m_strokes.indexOf(s) );
+  return true;
 }
 
 void Scene::getJointCandidates( Stroke* s, Path& pts )
